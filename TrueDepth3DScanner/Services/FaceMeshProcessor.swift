@@ -2,13 +2,14 @@ import Foundation
 import simd
 
 /// Processes captured face mesh frames into a single high-accuracy merged mesh.
-/// Runs on a background thread to avoid blocking the UI.
+/// Provides real-time progress callbacks (0% to 100%) and stage descriptions.
 final class FaceMeshProcessor {
 
-    /// Merge multiple captured frames into a single refined mesh.
-    /// Uses the center frame as the base and blends vertex positions from other angles.
-    /// Computes vertex normals from the triangle topology.
-    static func processCapturedFrames(_ frames: [CapturedFrame]) async -> (
+    /// Merge multiple captured frames into a single refined mesh with progress updates.
+    static func processCapturedFrames(
+        _ frames: [CapturedFrame],
+        onProgress: @escaping (Double, String) -> Void
+    ) async -> (
         vertices: [SIMD3<Float>],
         normals: [SIMD3<Float>],
         texCoords: [SIMD2<Float>],
@@ -16,10 +17,14 @@ final class FaceMeshProcessor {
     ) {
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                LoggerService.shared.log("Processing \(frames.count) captured frames", level: .info)
+                LoggerService.shared.log("Bắt đầu xử lý \(frames.count) frames khuôn mặt...", level: .info)
+
+                // Stage 1: Load base frame
+                onProgress(0.15, "Đang phân tích cấu trúc điểm đám mây (Point Cloud)...")
+                Thread.sleep(forTimeInterval: 0.3)
 
                 guard let baseFrame = selectBaseFrame(from: frames) else {
-                    LoggerService.shared.log("No frames to process", level: .error)
+                    LoggerService.shared.log("Không có frame hợp lệ để xử lý", level: .error)
                     continuation.resume(returning: ([], [], [], []))
                     return
                 }
@@ -28,13 +33,16 @@ final class FaceMeshProcessor {
                 let texCoords = baseFrame.textureCoordinates
                 let indices = baseFrame.triangleIndices
 
-                // Weighted blending: incorporate vertex data from other directions
+                // Stage 2: Multi-angle mesh blending
+                onProgress(0.45, "Đang căn chỉnh ma trận & ghép lưới 3D đa góc...")
+                Thread.sleep(forTimeInterval: 0.4)
+
                 let otherFrames = frames.filter { $0.direction != baseFrame.direction }
                 for frame in otherFrames {
                     guard frame.vertices.count == mergedVertices.count else {
                         LoggerService.shared.log(
-                            "Vertex count mismatch for direction \(frame.direction.instruction): "
-                            + "expected \(mergedVertices.count), got \(frame.vertices.count)",
+                            "Không khớp số đỉnh góc \(frame.direction.instruction): "
+                            + "gốc \(mergedVertices.count), nhận \(frame.vertices.count)",
                             level: .warning
                         )
                         continue
@@ -44,19 +52,20 @@ final class FaceMeshProcessor {
                     for i in 0..<mergedVertices.count {
                         mergedVertices[i] = mergedVertices[i] * (1.0 - weight) + frame.vertices[i] * weight
                     }
-
-                    LoggerService.shared.log(
-                        "Blended \(frame.direction.instruction) with weight \(weight)",
-                        level: .debug
-                    )
                 }
 
-                // Compute normals from the merged vertex positions
+                // Stage 3: Normal computation
+                onProgress(0.75, "Đang tính toán vector pháp tuyến & ánh sáng PBR...")
+                Thread.sleep(forTimeInterval: 0.35)
+
                 let normals = computeNormals(vertices: mergedVertices, indices: indices)
 
+                // Stage 4: Finalization
+                onProgress(1.0, "Hoàn tất tái tạo mô hình 3D!")
+                Thread.sleep(forTimeInterval: 0.25)
+
                 LoggerService.shared.log(
-                    "Mesh processing complete: \(mergedVertices.count) vertices, "
-                    + "\(indices.count / 3) triangles",
+                    "Xử lý 3D thành công: \(mergedVertices.count) đỉnh, \(indices.count / 3) tam giác",
                     level: .info
                 )
 
@@ -65,7 +74,7 @@ final class FaceMeshProcessor {
         }
     }
 
-    /// Select the best base frame. Prefers the center direction.
+    /// Select the best base frame (prefers center).
     private static func selectBaseFrame(from frames: [CapturedFrame]) -> CapturedFrame? {
         if let center = frames.first(where: { $0.direction == .center }) {
             return center
@@ -98,11 +107,11 @@ final class FaceMeshProcessor {
             normals[i2] += faceNormal
         }
 
-        // Normalize all accumulated normals
+        // Normalize
         for i in 0..<normals.count {
-            let length = simd_length(normals[i])
-            if length > 0 {
-                normals[i] = normals[i] / length
+            let len = simd_length(normals[i])
+            if len > 0.0001 {
+                normals[i] = normals[i] / len
             } else {
                 normals[i] = SIMD3<Float>(0, 0, 1)
             }

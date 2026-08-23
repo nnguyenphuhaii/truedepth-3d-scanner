@@ -5,10 +5,10 @@ import Combine
 import simd
 
 /// Manages the face scanning lifecycle:
-/// - 60 FPS SIMD face orientation extraction
-/// - Automatic baseline calibration
-/// - Lenient angle detection with instant 3-frame auto-capture (~0.05s)
-/// - Tap-to-select direction & Manual shutter capture
+/// - Smooth 60 FPS SIMD face orientation extraction
+/// - Steady multi-frame accumulation (14 frames per angle) for smooth, natural scanning all around the face
+/// - Real-time percentage progress tracking for 3D processing (0% -> 100%)
+/// - Interactive tap-to-select direction & Manual shutter capture
 final class ScannerViewModel: NSObject, ObservableObject {
 
     @Published var scanSession = FaceScanSession()
@@ -17,9 +17,13 @@ final class ScannerViewModel: NSObject, ObservableObject {
     @Published var currentDeltaY: Float = 0.0
     @Published var directionProgress: Double = 0.0
 
+    // 3D Processing Progress
+    @Published var processingProgress: Double = 0.0
+    @Published var processingStage: String = "Đang phân tích cấu trúc 3D..."
+
     private let logger = LoggerService.shared
     private var framesForCurrentDirection: Int = 0
-    private let requiredFramesPerDirection: Int = 3  // Instant capture (~0.05s)
+    private let requiredFramesPerDirection: Int = 14  // ~0.4s smooth deliberate hold/turn for high-density scanning
     private var isCapturingDirection: Bool = false
     private weak var arView: ARSCNView?
 
@@ -69,6 +73,8 @@ final class ScannerViewModel: NSObject, ObservableObject {
         isCapturingDirection = false
         isCalibrated = false
         directionProgress = 0.0
+        processingProgress = 0.0
+        processingStage = "Đang phân tích cấu trúc 3D..."
 
         if arView != nil {
             runARSession()
@@ -95,6 +101,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
         isCapturingDirection = false
         isCalibrated = false
         directionProgress = 0.0
+        processingProgress = 0.0
         logger.log("Scan reset", level: .info)
     }
 
@@ -162,6 +169,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
                 }
             }
         } else {
+            // Gradually decay if head turns away
             if framesForCurrentDirection > 0 && !isCapturingDirection {
                 framesForCurrentDirection = max(0, framesForCurrentDirection - 1)
             }
@@ -242,14 +250,21 @@ final class ScannerViewModel: NSObject, ObservableObject {
         }
     }
 
-    /// Process all captured frames into a final merged mesh on a background thread.
+    /// Process all captured frames into a final merged mesh on a background thread with progress feedback.
     func processScan() {
         scanSession.state = .processing
+        processingProgress = 0.05
+        processingStage = "Đang khởi tạo dữ liệu điểm 3D..."
         arView?.session.pause()
         logger.log("Bắt đầu xử lý dữ liệu 3D...", level: .info)
 
         Task {
-            let result = await FaceMeshProcessor.processCapturedFrames(scanSession.capturedFrames)
+            let result = await FaceMeshProcessor.processCapturedFrames(scanSession.capturedFrames) { [weak self] progress, stage in
+                Task { @MainActor in
+                    self?.processingProgress = progress
+                    self?.processingStage = stage
+                }
+            }
 
             await MainActor.run {
                 scanSession.finalVertices = result.vertices

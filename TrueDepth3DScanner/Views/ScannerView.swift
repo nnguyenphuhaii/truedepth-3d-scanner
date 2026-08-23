@@ -27,7 +27,10 @@ struct ScannerView: View {
                 case .scanning:
                     GuidanceOverlayView(viewModel: viewModel)
                 case .processing:
-                    ProcessingView()
+                    ProcessingView(
+                        progress: viewModel.processingProgress,
+                        stageText: viewModel.processingStage
+                    )
                 case .completed:
                     completedView
                 case .failed(let message):
