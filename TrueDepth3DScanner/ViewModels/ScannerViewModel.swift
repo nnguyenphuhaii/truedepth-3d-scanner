@@ -6,9 +6,9 @@ import simd
 
 /// Manages the face scanning lifecycle:
 /// - Smooth 60 FPS SIMD face orientation extraction
-/// - Steady multi-frame accumulation (14 frames per angle) for smooth, natural scanning all around the face
+/// - Steady multi-frame accumulation (14 frames per angle)
 /// - Real-time percentage progress tracking for 3D processing (0% -> 100%)
-/// - Interactive tap-to-select direction & Manual shutter capture
+/// - Auto-bubbles scanSession changes to ViewModel subscribers
 final class ScannerViewModel: NSObject, ObservableObject {
 
     @Published var scanSession = FaceScanSession()
@@ -23,9 +23,10 @@ final class ScannerViewModel: NSObject, ObservableObject {
 
     private let logger = LoggerService.shared
     private var framesForCurrentDirection: Int = 0
-    private let requiredFramesPerDirection: Int = 14  // ~0.4s smooth deliberate hold/turn for high-density scanning
+    private let requiredFramesPerDirection: Int = 14  // Smooth deliberate hold (~0.4s)
     private var isCapturingDirection: Bool = false
     private weak var arView: ARSCNView?
+    private var cancellables = Set<AnyCancellable>()
 
     // Baseline face orientation (calibrated on center)
     private var baselineX: Float = 0.0
@@ -35,6 +36,16 @@ final class ScannerViewModel: NSObject, ObservableObject {
     // UI Throttling
     private var lastUIUpdateTime: TimeInterval = 0
     private let uiUpdateInterval: TimeInterval = 0.066 // ~15 FPS UI update
+
+    override init() {
+        super.init()
+        // Automatically bubble nested scanSession changes to ViewModel subscribers
+        scanSession.objectWillChange
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
+            .store(in: &cancellables)
+    }
 
     /// Whether the device supports ARKit face tracking (TrueDepth camera required).
     var isARFaceTrackingSupported: Bool {
@@ -267,18 +278,18 @@ final class ScannerViewModel: NSObject, ObservableObject {
             }
 
             await MainActor.run {
-                scanSession.finalVertices = result.vertices
-                scanSession.finalNormals = result.normals
-                scanSession.finalTexCoords = result.texCoords
-                scanSession.finalIndices = result.indices
+                self.scanSession.finalVertices = result.vertices
+                self.scanSession.finalNormals = result.normals
+                self.scanSession.finalTexCoords = result.texCoords
+                self.scanSession.finalIndices = result.indices
 
                 if result.vertices.isEmpty {
-                    scanSession.state = .failed("Không tạo được mô hình 3D.")
-                    logger.log("Ghép mesh thất bại", level: .error)
+                    self.scanSession.state = .failed("Không tạo được mô hình 3D.")
+                    self.logger.log("Ghép mesh thất bại", level: .error)
                     HapticManager.shared.notification(.error)
                 } else {
-                    scanSession.state = .completed
-                    logger.log("Mô hình 3D hoàn tất: \(result.vertices.count) đỉnh", level: .info)
+                    self.scanSession.state = .completed
+                    self.logger.log("Mô hình 3D hoàn tất: \(result.vertices.count) đỉnh", level: .info)
                     HapticManager.shared.notification(.success)
                 }
             }

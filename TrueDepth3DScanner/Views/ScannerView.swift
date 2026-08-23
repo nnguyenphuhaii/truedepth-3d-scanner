@@ -117,20 +117,20 @@ struct ScannerView: View {
                 .font(.system(size: 64))
                 .foregroundStyle(.green)
 
-            Text("Scan Complete")
+            Text("Hoàn Tất Quét 3D!")
                 .font(.title2.bold())
                 .foregroundStyle(.white)
 
-            Text("\(viewModel.scanSession.finalVertices.count) vertices captured")
+            Text("Đã thu thập \(viewModel.scanSession.finalVertices.count) đỉnh và \(viewModel.scanSession.finalIndices.count / 3) tam giác")
                 .font(.subheadline)
                 .foregroundStyle(.gray)
 
             Button {
                 selectedTab = 1
             } label: {
-                HStack {
+                HStack(spacing: 8) {
                     Image(systemName: "cube.fill")
-                    Text("View 3D Model")
+                    Text("Xem Mô Hình 3D")
                 }
                 .font(.headline)
                 .foregroundStyle(.black)
@@ -139,10 +139,10 @@ struct ScannerView: View {
                 .background(.cyan, in: RoundedRectangle(cornerRadius: 14))
             }
 
-            Button("New Scan") {
+            Button("Quét Khuôn Mặt Mới") {
                 viewModel.resetScan()
             }
-            .font(.subheadline)
+            .font(.subheadline.bold())
             .foregroundStyle(.cyan)
         }
     }
