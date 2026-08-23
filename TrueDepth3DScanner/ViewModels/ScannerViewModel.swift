@@ -109,21 +109,10 @@ final class ScannerViewModel: NSObject, ObservableObject {
 
     /// Capture the geometry data from the current ARFaceGeometry for a given direction.
     private func captureGeometry(from geometry: ARFaceGeometry, direction: ScanDirection) {
-        let vertexCount = geometry.vertexCount
-        let indexCount = geometry.triangleCount * 3
-
-        // Copy geometry data using subscript access (compatible with all Swift/Xcode versions)
-        let vertexPtr = geometry.vertices
-        var vertices = [SIMD3<Float>](repeating: .zero, count: vertexCount)
-        for i in 0..<vertexCount { vertices[i] = vertexPtr[i] }
-
-        let texCoordPtr = geometry.textureCoordinates
-        var texCoords = [SIMD2<Float>](repeating: .zero, count: vertexCount)
-        for i in 0..<vertexCount { texCoords[i] = texCoordPtr[i] }
-
-        let indexPtr = geometry.triangleIndices
-        var indices = [Int16](repeating: 0, count: indexCount)
-        for i in 0..<indexCount { indices[i] = indexPtr[i] }
+        let vertices = geometry.vertices
+        let texCoords = geometry.textureCoordinates
+        let indices = geometry.triangleIndices
+        let vertexCount = vertices.count
 
         let frame = CapturedFrame(
             vertices: vertices,
