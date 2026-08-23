@@ -25,13 +25,7 @@ struct ScannerView: View {
                 case .idle:
                     idleView
                 case .scanning:
-                    GuidanceOverlayView(
-                        direction: viewModel.scanSession.currentDirection,
-                        progress: viewModel.scanSession.progress,
-                        directionProgress: viewModel.directionProgress,
-                        isFaceDetected: viewModel.isFaceDetected,
-                        completedDirections: viewModel.scanSession.completedDirections
-                    )
+                    GuidanceOverlayView(viewModel: viewModel)
                 case .processing:
                     ProcessingView()
                 case .completed:
