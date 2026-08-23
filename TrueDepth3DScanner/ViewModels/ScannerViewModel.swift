@@ -2,13 +2,15 @@ import Foundation
 import ARKit
 import SceneKit
 import Combine
+import CoreImage
+import UIKit
 import simd
 
 /// Manages the face scanning lifecycle:
 /// - Smooth 60 FPS SIMD face orientation extraction
 /// - Steady multi-frame accumulation (14 frames per angle)
+/// - High-resolution RGB camera image extraction for photorealistic texture mapping
 /// - Real-time percentage progress tracking for 3D processing (0% -> 100%)
-/// - Auto-bubbles scanSession changes to ViewModel subscribers
 final class ScannerViewModel: NSObject, ObservableObject {
 
     @Published var scanSession = FaceScanSession()
@@ -27,6 +29,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
     private var isCapturingDirection: Bool = false
     private weak var arView: ARSCNView?
     private var cancellables = Set<AnyCancellable>()
+    private let ciContext = CIContext(options: nil)
 
     // Baseline face orientation (calibrated on center)
     private var baselineX: Float = 0.0
@@ -180,7 +183,6 @@ final class ScannerViewModel: NSObject, ObservableObject {
                 }
             }
         } else {
-            // Gradually decay if head turns away
             if framesForCurrentDirection > 0 && !isCapturingDirection {
                 framesForCurrentDirection = max(0, framesForCurrentDirection - 1)
             }
@@ -223,19 +225,29 @@ final class ScannerViewModel: NSObject, ObservableObject {
         processScan()
     }
 
-    /// Capture geometry data from the ARFaceGeometry.
+    /// Extract a UIImage from the ARFrame's captured pixel buffer.
+    private func extractCameraImage() -> UIImage? {
+        guard let pixelBuffer = arView?.session.currentFrame?.capturedImage else { return nil }
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return nil }
+        return UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
+    }
+
+    /// Capture geometry data and camera photo from the ARFaceGeometry.
     private func captureGeometry(from geometry: ARFaceGeometry, direction: ScanDirection) {
         let vertices = geometry.vertices
         let texCoords = geometry.textureCoordinates
         let indices = geometry.triangleIndices
         let vertexCount = vertices.count
+        let cameraPhoto = extractCameraImage()
 
         let frame = CapturedFrame(
             vertices: vertices,
             textureCoordinates: texCoords,
             triangleIndices: indices,
             direction: direction,
-            timestamp: Date()
+            timestamp: Date(),
+            cameraImage: cameraPhoto
         )
 
         DispatchQueue.main.async { [weak self] in
@@ -247,7 +259,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
             self.isCapturingDirection = false
 
             self.logger.log(
-                "Đã quét thành công góc: \(direction.instruction) (\(vertexCount) vertices)",
+                "Đã quét thành công góc: \(direction.instruction) (\(vertexCount) vertices, ảnh: \(cameraPhoto != nil))",
                 level: .info
             )
 
@@ -265,7 +277,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
     func processScan() {
         scanSession.state = .processing
         processingProgress = 0.05
-        processingStage = "Đang khởi tạo dữ liệu điểm 3D..."
+        processingStage = "Đang khởi tạo dữ liệu điểm 3D & trích xuất ảnh mặt thật..."
         arView?.session.pause()
         logger.log("Bắt đầu xử lý dữ liệu 3D...", level: .info)
 
@@ -282,6 +294,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
                 self.scanSession.finalNormals = result.normals
                 self.scanSession.finalTexCoords = result.texCoords
                 self.scanSession.finalIndices = result.indices
+                self.scanSession.finalTexture = result.texture
 
                 if result.vertices.isEmpty {
                     self.scanSession.state = .failed("Không tạo được mô hình 3D.")
@@ -289,7 +302,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
                     HapticManager.shared.notification(.error)
                 } else {
                     self.scanSession.state = .completed
-                    self.logger.log("Mô hình 3D hoàn tất: \(result.vertices.count) đỉnh", level: .info)
+                    self.logger.log("Mô hình 3D hoàn tất: \(result.vertices.count) đỉnh, có texture ảnh mặt thật: \(result.texture != nil)", level: .info)
                     HapticManager.shared.notification(.success)
                 }
             }

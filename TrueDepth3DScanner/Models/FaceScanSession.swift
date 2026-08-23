@@ -1,13 +1,15 @@
 import Foundation
 import ARKit
+import UIKit
 
-/// A single captured frame of face geometry from a specific scan direction.
+/// A single captured frame of face geometry and camera image from a specific scan direction.
 struct CapturedFrame {
     let vertices: [SIMD3<Float>]
     let textureCoordinates: [SIMD2<Float>]
     let triangleIndices: [Int16]
     let direction: ScanDirection
     let timestamp: Date
+    let cameraImage: UIImage?
 }
 
 /// Represents the current state of the scanning pipeline.
@@ -34,7 +36,7 @@ enum ScanState: Equatable {
 }
 
 /// Observable model that holds all data for a face scan session.
-/// Tracks captured frames per direction, overall progress, and the final merged mesh.
+/// Tracks captured frames per direction, overall progress, and the final merged mesh with photo texture.
 class FaceScanSession: ObservableObject {
     @Published var capturedFrames: [CapturedFrame] = []
     @Published var completedDirections: Set<ScanDirection> = []
@@ -42,11 +44,12 @@ class FaceScanSession: ObservableObject {
     @Published var progress: Double = 0.0
     @Published var state: ScanState = .idle
 
-    // Final merged mesh data (populated after processing)
+    // Final merged 3D mesh data with real photo texture
     @Published var finalVertices: [SIMD3<Float>] = []
     @Published var finalNormals: [SIMD3<Float>] = []
     @Published var finalTexCoords: [SIMD2<Float>] = []
     @Published var finalIndices: [Int16] = []
+    @Published var finalTexture: UIImage?
 
     /// Add a captured frame and update progress.
     func addFrame(_ frame: CapturedFrame) {
@@ -59,7 +62,17 @@ class FaceScanSession: ObservableObject {
         }
     }
 
-    /// Reset all session data to initial state.
+    /// The next uncaptured direction in guided order, or `nil` if all directions are captured.
+    var nextDirection: ScanDirection? {
+        ScanDirection.allCases.first { !completedDirections.contains($0) }
+    }
+
+    /// Whether all five directions have been captured.
+    var isAllDirectionsCaptured: Bool {
+        completedDirections.count == ScanDirection.allCases.count
+    }
+
+    /// Reset the session to its initial idle state.
     func reset() {
         capturedFrames.removeAll()
         completedDirections.removeAll()
@@ -70,15 +83,6 @@ class FaceScanSession: ObservableObject {
         finalNormals.removeAll()
         finalTexCoords.removeAll()
         finalIndices.removeAll()
-    }
-
-    /// Returns the next direction that has not yet been captured, or `nil` if all are done.
-    var nextDirection: ScanDirection? {
-        ScanDirection.allCases.first { !completedDirections.contains($0) }
-    }
-
-    /// Returns `true` when all five directions have been captured.
-    var isAllDirectionsCaptured: Bool {
-        completedDirections.count == ScanDirection.allCases.count
+        finalTexture = nil
     }
 }

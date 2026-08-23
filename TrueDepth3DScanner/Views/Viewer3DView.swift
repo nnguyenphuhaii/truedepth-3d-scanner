@@ -3,26 +3,28 @@ import SceneKit
 
 /// Display mode for the 3D Face Model.
 enum RenderMode: String, CaseIterable, Identifiable {
-    case solid = "Màu Da"
-    case wireframe = "Lưới 3D"
-    case points = "Điểm Mesh"
+    case textured = "Mặt Thật 3D"
+    case hybrid = "Lưới + Ảnh"
+    case clay = "Tượng Điêu Khắc"
+    case wireframe = "Lưới 3D Cyan"
 
     var id: String { rawValue }
 
     var systemImage: String {
         switch self {
-        case .solid:     return "circle.fill"
+        case .textured:  return "person.crop.circle.fill"
+        case .hybrid:    return "square.stack.3d.up.fill"
+        case .clay:      return "circle.fill"
         case .wireframe: return "triangle"
-        case .points:    return "circle.grid.3x3.fill"
         }
     }
 }
 
 /// Displays the scanned 3D face model with interactive rotation and zoom.
-/// Provides multiple render styles and export options (OBJ and USDZ).
+/// Features high-resolution real face photo texture mapping and multiple rendering styles.
 struct Viewer3DView: View {
     @ObservedObject var viewModel: ScannerViewModel
-    @State private var renderMode: RenderMode = .solid
+    @State private var renderMode: RenderMode = .textured
     @State private var exportedFileURL: URL?
     @State private var showShareSheet = false
 
@@ -41,7 +43,7 @@ struct Viewer3DView: View {
                     placeholderView
                 }
             }
-            .navigationTitle("3D Viewer")
+            .navigationTitle("3D Face Model")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if hasModelData {
@@ -62,13 +64,13 @@ struct Viewer3DView: View {
                             Button {
                                 exportAsOBJ()
                             } label: {
-                                Label("Xuất file Wavefront OBJ (.obj + .mtl)", systemImage: "doc.text")
+                                Label("Xuất file Wavefront OBJ (.obj + .mtl + Texture)", systemImage: "doc.text")
                             }
 
                             Button {
                                 exportAsUSDZ()
                             } label: {
-                                Label("Xuất file Apple USDZ (.usdz)", systemImage: "arkit")
+                                Label("Xuất file Apple USDZ (.usdz có Texture)", systemImage: "arkit")
                             }
                         } label: {
                             Image(systemName: "square.and.arrow.up")
@@ -95,6 +97,7 @@ struct Viewer3DView: View {
                 normals: viewModel.scanSession.finalNormals,
                 texCoords: viewModel.scanSession.finalTexCoords,
                 indices: viewModel.scanSession.finalIndices,
+                texture: viewModel.scanSession.finalTexture,
                 renderMode: renderMode
             )
             .ignoresSafeArea(edges: .top)
@@ -102,14 +105,30 @@ struct Viewer3DView: View {
             // Bottom Controls & Info Bar
             VStack(spacing: 12) {
                 // Render Mode Switcher
-                Picker("Chế độ hiển thị", selection: $renderMode) {
-                    ForEach(RenderMode.allCases) { mode in
-                        Label(mode.rawValue, systemImage: mode.systemImage)
-                            .tag(mode)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(RenderMode.allCases) { mode in
+                            Button {
+                                renderMode = mode
+                                HapticManager.shared.selection()
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: mode.systemImage)
+                                    Text(mode.rawValue)
+                                }
+                                .font(.subheadline.bold())
+                                .foregroundStyle(renderMode == mode ? .black : .white)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .background(
+                                    renderMode == mode ? Color.cyan : Color.white.opacity(0.12),
+                                    in: Capsule()
+                                )
+                            }
+                        }
                     }
+                    .padding(.horizontal, 16)
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
 
                 // Stats Bar
                 HStack {
@@ -123,7 +142,12 @@ struct Viewer3DView: View {
                         systemImage: "triangle"
                     )
                     Spacer()
-                    Label("Xoay & Zoom 360°", systemImage: "hand.pinch")
+                    Label(
+                        viewModel.scanSession.finalTexture != nil ? "Texture HD" : "3D Mesh",
+                        systemImage: "photo.fill"
+                    )
+                    Spacer()
+                    Label("Xoay 360°", systemImage: "hand.pinch")
                 }
                 .font(.caption)
                 .foregroundStyle(.gray)
@@ -139,7 +163,7 @@ struct Viewer3DView: View {
 
     private var placeholderView: some View {
         VStack(spacing: 20) {
-            Image(systemName: "cube.transparent")
+            Image(systemName: "person.crop.circle.badge.questionmark")
                 .font(.system(size: 64))
                 .foregroundStyle(.gray.opacity(0.4))
 
@@ -162,7 +186,8 @@ struct Viewer3DView: View {
             vertices: session.finalVertices,
             normals: session.finalNormals,
             texCoords: session.finalTexCoords,
-            indices: session.finalIndices
+            indices: session.finalIndices,
+            texture: session.finalTexture
         ) {
             exportedFileURL = url
             showShareSheet = true
@@ -178,7 +203,8 @@ struct Viewer3DView: View {
             vertices: session.finalVertices,
             normals: session.finalNormals,
             texCoords: session.finalTexCoords,
-            indices: session.finalIndices
+            indices: session.finalIndices,
+            texture: session.finalTexture
         ) {
             exportedFileURL = url
             showShareSheet = true
@@ -192,13 +218,14 @@ struct Viewer3DView: View {
 // MARK: - SceneKit Container
 
 /// UIViewRepresentable wrapping SCNView for 3D model display.
-/// Rebuilds scene dynamically upon data updates and supports Solid, Wireframe, and Point rendering.
+/// Supports high-resolution texture mapping from the user's real face, double-sided rendering, and studio lighting.
 struct SceneKitContainer: UIViewRepresentable {
     let vertices: [SIMD3<Float>]
     let normals: [SIMD3<Float>]
     let texCoords: [SIMD2<Float>]
     let indices: [Int16]
-    var renderMode: RenderMode = .solid
+    let texture: UIImage?
+    var renderMode: RenderMode = .textured
 
     func makeUIView(context: Context) -> SCNView {
         let scnView = SCNView()
@@ -211,7 +238,6 @@ struct SceneKitContainer: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: SCNView, context: Context) {
-        // Update the 3D scene whenever new vertices arrive or render mode changes
         uiView.scene = buildScene()
     }
 
@@ -232,9 +258,9 @@ struct SceneKitContainer: UIViewRepresentable {
         }
         let normalSource = SCNGeometrySource(normals: normalVectors)
 
-        // Texture Coordinates
+        // Texture Coordinates (UV mapping)
         let texCoordSource = SCNGeometrySource(
-            textureCoordinates: texCoords.map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) }
+            textureCoordinates: texCoords.map { CGPoint(x: CGFloat($0.x), y: CGFloat(1.0 - $0.y)) }
         )
 
         // Geometry Element (Triangles)
@@ -253,28 +279,65 @@ struct SceneKitContainer: UIViewRepresentable {
 
         // Material Configuration
         let material = SCNMaterial()
+        material.isDoubleSided = true
+
         switch renderMode {
-        case .solid:
-            material.diffuse.contents = UIColor(red: 0.90, green: 0.78, blue: 0.68, alpha: 1.0)
-            material.specular.contents = UIColor(white: 0.5, alpha: 1.0)
-            material.roughness.contents = NSNumber(value: 0.5)
-            material.metalness.contents = NSNumber(value: 0.05)
+        case .textured:
+            if let texture = texture {
+                material.diffuse.contents = texture
+                material.roughness.contents = NSNumber(value: 0.6)
+                material.specular.contents = UIColor(white: 0.2, alpha: 1.0)
+                material.lightingModel = .phong
+            } else {
+                material.diffuse.contents = UIColor(red: 0.88, green: 0.76, blue: 0.67, alpha: 1.0)
+                material.lightingModel = .phong
+            }
+            material.fillMode = .fill
+
+        case .hybrid:
+            if let texture = texture {
+                material.diffuse.contents = texture
+            } else {
+                material.diffuse.contents = UIColor(red: 0.88, green: 0.76, blue: 0.67, alpha: 1.0)
+            }
             material.lightingModel = .phong
             material.fillMode = .fill
+
+        case .clay:
+            material.diffuse.contents = UIColor(red: 0.75, green: 0.72, blue: 0.70, alpha: 1.0)
+            material.specular.contents = UIColor(white: 0.4, alpha: 1.0)
+            material.roughness.contents = NSNumber(value: 0.4)
+            material.lightingModel = .physicallyBased
+            material.fillMode = .fill
+
         case .wireframe:
             material.diffuse.contents = UIColor.cyan
             material.lightingModel = .constant
             material.fillMode = .lines
-        case .points:
-            material.diffuse.contents = UIColor.green
-            material.lightingModel = .constant
-            material.fillMode = .fill
         }
-        material.isDoubleSided = true
+
         geometry.materials = [material]
 
         let meshNode = SCNNode(geometry: geometry)
         scene.rootNode.addChildNode(meshNode)
+
+        // In Hybrid mode: Add a second overlay wireframe node
+        if renderMode == .hybrid {
+            let wireMaterial = SCNMaterial()
+            wireMaterial.diffuse.contents = UIColor.cyan.withAlphaComponent(0.6)
+            wireMaterial.lightingModel = .constant
+            wireMaterial.fillMode = .lines
+            wireMaterial.isDoubleSided = true
+
+            let wireGeometry = SCNGeometry(
+                sources: [positionSource, normalSource, texCoordSource],
+                elements: [element]
+            )
+            wireGeometry.materials = [wireMaterial]
+            let wireNode = SCNNode(geometry: wireGeometry)
+            wireNode.scale = SCNVector3(1.002, 1.002, 1.002) // Slight offset to prevent Z-fighting
+            scene.rootNode.addChildNode(wireNode)
+        }
 
         // Camera Node setup
         let cameraNode = SCNNode()
@@ -297,7 +360,7 @@ struct SceneKitContainer: UIViewRepresentable {
         let omni = SCNNode()
         omni.light = SCNLight()
         omni.light?.type = .omni
-        omni.light?.intensity = 1000
+        omni.light?.intensity = 1100
         omni.light?.color = UIColor.white
         omni.position = SCNVector3(0, 0, 0.5)
         scene.rootNode.addChildNode(omni)

@@ -1,19 +1,18 @@
 import Foundation
 import ModelIO
 import SceneKit
+import UIKit
 
-/// Exports face mesh data to Apple USDZ format using ModelIO.
-/// USDZ is Apple's native 3D format, compatible with Quick Look, Reality Composer, and Blender.
+/// Exports face mesh data and photo texture to Apple USDZ format using ModelIO.
 final class USDZExporter {
 
-    /// Export mesh data to a USDZ file.
-    /// Falls back to USDA if USDZ export is unavailable on the device.
-    /// Returns the URL of the generated file, or `nil` on failure.
+    /// Export mesh data to a USDZ file with embedded face texture.
     static func export(
         vertices: [SIMD3<Float>],
         normals: [SIMD3<Float>],
         texCoords: [SIMD2<Float>],
-        indices: [Int16]
+        indices: [Int16],
+        texture: UIImage? = nil
     ) -> URL? {
         let logger = LoggerService.shared
 
@@ -33,13 +32,50 @@ final class USDZExporter {
         let normalBuffer = allocator.newBuffer(with: normalData, type: .vertex)
 
         // Build texture coordinate buffer
-        let texCoordData = texCoords.withUnsafeBytes { Data($0) }
+        let flippedTexCoords = texCoords.map { SIMD2<Float>($0.x, 1.0 - $0.y) }
+        let texCoordData = flippedTexCoords.withUnsafeBytes { Data($0) }
         let texCoordBuffer = allocator.newBuffer(with: texCoordData, type: .vertex)
 
-        // Build index buffer (convert Int16 to UInt32 for ModelIO)
+        // Build index buffer (UInt32 for ModelIO)
         let uint32Indices = indices.map { UInt32($0) }
         let indexData = uint32Indices.withUnsafeBytes { Data($0) }
         let indexBuffer = allocator.newBuffer(with: indexData, type: .index)
+
+        // Temp directory for export
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FaceScanUSDZ_\(UUID().uuidString)", isDirectory: true)
+
+        do {
+            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        } catch {
+            logger.log("Failed to create USDZ temp dir", level: .error)
+            return nil
+        }
+
+        // Material setup
+        let material = MDLMaterial(
+            name: "FaceMaterial",
+            scatteringFunction: MDLPhysicallyPlausibleScatteringFunction()
+        )
+
+        if let texture = texture, let jpegData = texture.jpegData(compressionQuality: 0.9) {
+            let textureURL = tempDir.appendingPathComponent("FaceTexture.jpg")
+            try? jpegData.write(to: textureURL)
+
+            let textureProp = MDLMaterialProperty(
+                name: "baseColor",
+                semantic: .baseColor,
+                url: textureURL
+            )
+            material.setProperty(textureProp)
+        } else {
+            let diffuseColor = MDLMaterialProperty(
+                name: "baseColor",
+                semantic: .baseColor,
+                color: UIColor(red: 0.87, green: 0.77, blue: 0.68, alpha: 1.0).cgColor
+            )
+            material.setProperty(diffuseColor)
+        }
 
         // Create submesh
         let submesh = MDLSubmesh(
@@ -47,7 +83,7 @@ final class USDZExporter {
             indexCount: uint32Indices.count,
             indexType: .uInt32,
             geometryType: .triangles,
-            material: createMaterial()
+            material: material
         )
 
         // Vertex descriptor
@@ -92,41 +128,15 @@ final class USDZExporter {
         let asset = MDLAsset()
         asset.add(mesh)
 
-        // Export
-        let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("FaceScanExport", isDirectory: true)
+        let fileURL = tempDir.appendingPathComponent("FaceScan.usdz")
 
         do {
-            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-
-            if MDLAsset.canExportFileExtension("usdz") {
-                let usdzURL = tempDir.appendingPathComponent("FaceScan.usdz")
-                try asset.export(to: usdzURL)
-                logger.log("USDZ exported successfully (\(vertices.count) verts)", level: .info)
-                return usdzURL
-            } else {
-                // Fallback to USDA
-                let usdaURL = tempDir.appendingPathComponent("FaceScan.usda")
-                try asset.export(to: usdaURL)
-                logger.log("Exported as USDA fallback (USDZ unavailable)", level: .warning)
-                return usdaURL
-            }
+            try asset.export(to: fileURL)
+            logger.log("USDZ file exported successfully: \(fileURL.path)", level: .info)
+            return fileURL
         } catch {
             logger.log("USDZ export failed: \(error.localizedDescription)", level: .error)
             return nil
         }
-    }
-
-    /// Creates a physically plausible material with a skin-tone base color.
-    private static func createMaterial() -> MDLMaterial {
-        let scattering = MDLPhysicallyPlausibleScatteringFunction()
-        let material = MDLMaterial(name: "FaceMaterial", scatteringFunction: scattering)
-        let baseColor = MDLMaterialProperty(
-            name: "baseColor",
-            semantic: .baseColor,
-            float3: SIMD3<Float>(0.85, 0.75, 0.65)
-        )
-        material.setProperty(baseColor)
-        return material
     }
 }

@@ -1,11 +1,12 @@
 import Foundation
+import UIKit
 import simd
 
-/// Processes captured face mesh frames into a single high-accuracy merged mesh.
-/// Provides real-time progress callbacks (0% to 100%) and stage descriptions.
+/// Processes captured face mesh frames and real camera photos into a high-accuracy 3D textured mesh.
+/// Provides staged real-time progress callbacks (0% to 100%).
 final class FaceMeshProcessor {
 
-    /// Merge multiple captured frames into a single refined mesh with progress updates.
+    /// Merge multiple captured frames and extract high-resolution face texture.
     static func processCapturedFrames(
         _ frames: [CapturedFrame],
         onProgress: @escaping (Double, String) -> Void
@@ -13,25 +14,29 @@ final class FaceMeshProcessor {
         vertices: [SIMD3<Float>],
         normals: [SIMD3<Float>],
         texCoords: [SIMD2<Float>],
-        indices: [Int16]
+        indices: [Int16],
+        texture: UIImage?
     ) {
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                LoggerService.shared.log("Bắt đầu xử lý \(frames.count) frames khuôn mặt...", level: .info)
+                LoggerService.shared.log("Bắt đầu xử lý \(frames.count) frames quét khuôn mặt...", level: .info)
 
-                // Stage 1: Load base frame
-                onProgress(0.15, "Đang phân tích cấu trúc điểm đám mây (Point Cloud)...")
+                // Stage 1: Load base frame and texture
+                onProgress(0.15, "Đang phân tích cấu trúc điểm & trích xuất Texture ảnh mặt thật...")
                 Thread.sleep(forTimeInterval: 0.3)
 
                 guard let baseFrame = selectBaseFrame(from: frames) else {
                     LoggerService.shared.log("Không có frame hợp lệ để xử lý", level: .error)
-                    continuation.resume(returning: ([], [], [], []))
+                    continuation.resume(returning: ([], [], [], [], nil))
                     return
                 }
 
                 var mergedVertices = baseFrame.vertices
                 let texCoords = baseFrame.textureCoordinates
                 let indices = baseFrame.triangleIndices
+
+                // Extract best real face photo texture
+                let faceTexture = selectBestTexture(from: frames)
 
                 // Stage 2: Multi-angle mesh blending
                 onProgress(0.45, "Đang căn chỉnh ma trận & ghép lưới 3D đa góc...")
@@ -61,15 +66,15 @@ final class FaceMeshProcessor {
                 let normals = computeNormals(vertices: mergedVertices, indices: indices)
 
                 // Stage 4: Finalization
-                onProgress(1.0, "Hoàn tất tái tạo mô hình 3D!")
+                onProgress(1.0, "Hoàn tất tái tạo mô hình 3D mặt thật!")
                 Thread.sleep(forTimeInterval: 0.25)
 
                 LoggerService.shared.log(
-                    "Xử lý 3D thành công: \(mergedVertices.count) đỉnh, \(indices.count / 3) tam giác",
+                    "Xử lý 3D thành công: \(mergedVertices.count) đỉnh, \(indices.count / 3) tam giác, có texture: \(faceTexture != nil)",
                     level: .info
                 )
 
-                continuation.resume(returning: (mergedVertices, normals, texCoords, indices))
+                continuation.resume(returning: (mergedVertices, normals, texCoords, indices, faceTexture))
             }
         }
     }
@@ -80,6 +85,16 @@ final class FaceMeshProcessor {
             return center
         }
         return frames.first
+    }
+
+    /// Select the highest quality frontal face photo for texture mapping.
+    private static func selectBestTexture(from frames: [CapturedFrame]) -> UIImage? {
+        // Prioritize center photo for frontal illumination
+        if let center = frames.first(where: { $0.direction == .center }), let img = center.cameraImage {
+            return img
+        }
+        // Fallback to any available camera frame
+        return frames.compactMap { $0.cameraImage }.first
     }
 
     /// Compute per-vertex normals by averaging face normals of adjacent triangles.
