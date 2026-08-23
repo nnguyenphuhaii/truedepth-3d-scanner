@@ -26,6 +26,19 @@ final class ScannerViewModel: NSObject, ObservableObject {
     /// Store a weak reference to the ARSCNView for session management.
     func setARView(_ view: ARSCNView) {
         self.arView = view
+        logger.log("ARView successfully attached", level: .info)
+        if scanSession.state == .scanning {
+            runARSession()
+        }
+    }
+
+    /// Run the AR face tracking configuration on the attached ARSCNView.
+    private func runARSession() {
+        guard let arView = arView else { return }
+        let configuration = ARFaceTrackingConfiguration()
+        configuration.maximumNumberOfTrackedFaces = 1
+        arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+        logger.log("Face tracking session running", level: .info)
     }
 
     /// Begin a new face scan. Resets any previous session data.
@@ -36,21 +49,16 @@ final class ScannerViewModel: NSObject, ObservableObject {
             return
         }
 
-        guard let arView = arView else {
-            logger.log("ARView not available", level: .error)
-            return
-        }
-
         scanSession.reset()
         scanSession.state = .scanning
         framesForCurrentDirection = 0
         isCapturingDirection = false
 
-        let configuration = ARFaceTrackingConfiguration()
-        configuration.maximumNumberOfTrackedFaces = 1
-
-        arView.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
-        logger.log("Face tracking session started", level: .info)
+        if arView != nil {
+            runARSession()
+        } else {
+            logger.log("ARView preparing to attach...", level: .info)
+        }
         HapticManager.shared.impact(.medium)
     }
 

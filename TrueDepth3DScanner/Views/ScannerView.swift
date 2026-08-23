@@ -5,6 +5,7 @@ import ARKit
 /// - Idle: start button and device compatibility check
 /// - Scanning: AR camera feed with guidance overlay
 /// - Processing: animated processing screen
+/// - Completed: scan summary and shortcut to 3D Viewer
 /// - Failed: error message with retry
 struct ScannerView: View {
     @ObservedObject var viewModel: ScannerViewModel
@@ -15,11 +16,22 @@ struct ScannerView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
+                // AR Camera View (always mounted in hierarchy to ensure ARSCNView is ready)
+                ARViewContainer(viewModel: viewModel)
+                    .ignoresSafeArea()
+                    .opacity(viewModel.scanSession.state == .scanning ? 1.0 : 0.0)
+
                 switch viewModel.scanSession.state {
                 case .idle:
                     idleView
                 case .scanning:
-                    scanningView
+                    GuidanceOverlayView(
+                        direction: viewModel.scanSession.currentDirection,
+                        progress: viewModel.scanSession.progress,
+                        directionProgress: viewModel.directionProgress,
+                        isFaceDetected: viewModel.isFaceDetected,
+                        completedDirections: viewModel.scanSession.completedDirections
+                    )
                 case .processing:
                     ProcessingView()
                 case .completed:
@@ -97,23 +109,6 @@ struct ScannerView: View {
             }
 
             Spacer()
-        }
-    }
-
-    // MARK: - Scanning State
-
-    private var scanningView: some View {
-        ZStack {
-            ARViewContainer(viewModel: viewModel)
-                .ignoresSafeArea()
-
-            GuidanceOverlayView(
-                direction: viewModel.scanSession.currentDirection,
-                progress: viewModel.scanSession.progress,
-                directionProgress: viewModel.directionProgress,
-                isFaceDetected: viewModel.isFaceDetected,
-                completedDirections: viewModel.scanSession.completedDirections
-            )
         }
     }
 
