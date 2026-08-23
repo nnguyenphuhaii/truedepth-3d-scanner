@@ -1,0 +1,73 @@
+name: iOS Sideload Build
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Unsigned IPA
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build for iOS (unsigned)
+        run: |
+          xcodebuild build \
+            -project TrueDepth3DScanner.xcodeproj \
+            -scheme TrueDepth3DScanner \
+            -destination 'generic/platform=iOS' \
+            -configuration Release \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            DEVELOPMENT_TEAM="" \
+            ONLY_ACTIVE_ARCH=NO \
+            BUILD_DIR=${{ github.workspace }}/build
+
+      - name: Create Payload directory
+        run: |
+          mkdir -p Payload
+          cp -r build/Release-iphoneos/TrueDepth3DScanner.app Payload/
+
+      - name: Package IPA
+        run: |
+          zip -r TrueDepth3DScanner.ipa Payload/
+          echo "IPA size: $(du -h TrueDepth3DScanner.ipa | cut -f1)"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrueDepth3DScanner-IPA
+          path: TrueDepth3DScanner.ipa
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v1.0.0-build.${{ github.run_number }}"
+          gh release create "$TAG" \
+            TrueDepth3DScanner.ipa \
+            --title "TrueDepth 3D Scanner $TAG" \
+            --notes "Unsigned IPA build for Sideloadly installation.
+
+          ## Installation
+          1. Download \`TrueDepth3DScanner.ipa\` from this release
+          2. Open Sideloadly and connect your iPhone via USB
+          3. Drag the IPA into Sideloadly
+          4. Sign in with your Apple ID and click Start
+          5. On your iPhone: Settings > General > VPN & Device Management > Trust the profile
+
+          ## Requirements
+          - iPhone X or later (TrueDepth camera required)
+          - iOS 18.0 or later"
