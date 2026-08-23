@@ -7,10 +7,9 @@ import UIKit
 import simd
 
 /// Manages the face scanning lifecycle:
-/// - Smooth 60 FPS SIMD face orientation extraction
-/// - Steady multi-frame accumulation (14 frames per angle)
-/// - High-resolution RGB camera image extraction for photorealistic texture mapping
-/// - Real-time percentage progress tracking for 3D processing (0% -> 100%)
+/// - 60 FPS SIMD face orientation extraction
+/// - Exact 1:1 camera projection UV calculation so the photo texture perfectly fits eyes, nose, and lips
+/// - Multi-angle accumulation without canonical geometry distortion
 final class ScannerViewModel: NSObject, ObservableObject {
 
     @Published var scanSession = FaceScanSession()
@@ -25,7 +24,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
 
     private let logger = LoggerService.shared
     private var framesForCurrentDirection: Int = 0
-    private let requiredFramesPerDirection: Int = 14  // Smooth deliberate hold (~0.4s)
+    private let requiredFramesPerDirection: Int = 12  // Smooth deliberate hold (~0.35s)
     private var isCapturingDirection: Bool = false
     private weak var arView: ARSCNView?
     private var cancellables = Set<AnyCancellable>()
@@ -169,7 +168,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
 
             if framesForCurrentDirection >= requiredFramesPerDirection && !isCapturingDirection {
                 isCapturingDirection = true
-                captureGeometry(from: faceAnchor.geometry, direction: direction)
+                captureGeometry(from: faceAnchor, direction: direction)
             } else {
                 let now = CACurrentMediaTime()
                 if now - lastUIUpdateTime > uiUpdateInterval {
@@ -212,7 +211,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
         }
 
         let direction = scanSession.currentDirection
-        captureGeometry(from: faceAnchor.geometry, direction: direction)
+        captureGeometry(from: faceAnchor, direction: direction)
         HapticManager.shared.impact(.heavy)
     }
 
@@ -225,25 +224,76 @@ final class ScannerViewModel: NSObject, ObservableObject {
         processScan()
     }
 
-    /// Extract a UIImage from the ARFrame's captured pixel buffer.
-    private func extractCameraImage() -> UIImage? {
-        guard let pixelBuffer = arView?.session.currentFrame?.capturedImage else { return nil }
+    /// Extract an upright portrait UIImage from the ARFrame's captured pixel buffer.
+    private func extractPortraitCameraImage() -> (image: UIImage?, size: CGSize) {
+        guard let pixelBuffer = arView?.session.currentFrame?.capturedImage else { return (nil, .zero) }
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) else { return nil }
-        return UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
+        let orientedCIImage = ciImage.oriented(.right)
+
+        guard let cgImage = ciContext.createCGImage(orientedCIImage, from: orientedCIImage.extent) else { return (nil, .zero) }
+        let portraitImage = UIImage(cgImage: cgImage)
+        let portraitSize = orientedCIImage.extent.size
+
+        return (portraitImage, portraitSize)
     }
 
-    /// Capture geometry data and camera photo from the ARFaceGeometry.
-    private func captureGeometry(from geometry: ARFaceGeometry, direction: ScanDirection) {
+    /// Compute precise 2D projective UV coordinates mapping each 3D vertex onto the camera photo.
+    private func computeProjectiveUVs(
+        vertices: [SIMD3<Float>],
+        faceTransform: simd_float4x4,
+        camera: ARCamera,
+        viewportSize: CGSize
+    ) -> [SIMD2<Float>] {
+        var uvs = [SIMD2<Float>]()
+        uvs.reserveCapacity(vertices.count)
+
+        for v in vertices {
+            // Local face coordinate to world/camera space
+            let localPoint = simd_float4(v.x, v.y, v.z, 1.0)
+            let worldPoint4 = simd_mul(faceTransform, localPoint)
+            let worldPoint = simd_float3(worldPoint4.x, worldPoint4.y, worldPoint4.z)
+
+            // Project onto portrait camera viewport
+            let projected = camera.projectPoint(
+                worldPoint,
+                orientation: .portrait,
+                viewportSize: viewportSize
+            )
+
+            let u = Float(projected.x / viewportSize.width)
+            let v = Float(projected.y / viewportSize.height)
+
+            uvs.append(SIMD2<Float>(max(0.0, min(1.0, u)), max(0.0, min(1.0, v))))
+        }
+
+        return uvs
+    }
+
+    /// Capture geometry data and camera photo from the ARFaceAnchor with camera projection UVs.
+    private func captureGeometry(from faceAnchor: ARFaceAnchor, direction: ScanDirection) {
+        let geometry = faceAnchor.geometry
         let vertices = geometry.vertices
-        let texCoords = geometry.textureCoordinates
+        let canonicalUVs = geometry.textureCoordinates
         let indices = geometry.triangleIndices
         let vertexCount = vertices.count
-        let cameraPhoto = extractCameraImage()
+
+        let (cameraPhoto, photoSize) = extractPortraitCameraImage()
+
+        // Calculate exact projective UVs if camera is available
+        var finalUVs = canonicalUVs
+        if let camera = arView?.session.currentFrame?.camera, photoSize.width > 0 {
+            finalUVs = computeProjectiveUVs(
+                vertices: vertices,
+                faceTransform: faceAnchor.transform,
+                camera: camera,
+                viewportSize: photoSize
+            )
+        }
 
         let frame = CapturedFrame(
             vertices: vertices,
-            textureCoordinates: texCoords,
+            textureCoordinates: finalUVs,
+            canonicalUVs: canonicalUVs,
             triangleIndices: indices,
             direction: direction,
             timestamp: Date(),
@@ -277,7 +327,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
     func processScan() {
         scanSession.state = .processing
         processingProgress = 0.05
-        processingStage = "Đang khởi tạo dữ liệu điểm 3D & trích xuất ảnh mặt thật..."
+        processingStage = "Đang phân tích cấu trúc 3D & trích xuất ảnh mặt thật..."
         arView?.session.pause()
         logger.log("Bắt đầu xử lý dữ liệu 3D...", level: .info)
 
@@ -302,7 +352,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
                     HapticManager.shared.notification(.error)
                 } else {
                     self.scanSession.state = .completed
-                    self.logger.log("Mô hình 3D hoàn tất: \(result.vertices.count) đỉnh, có texture ảnh mặt thật: \(result.texture != nil)", level: .info)
+                    self.logger.log("Mô hình 3D hoàn tất: \(result.vertices.count) đỉnh, Texture ảnh thật: \(result.texture != nil)", level: .info)
                     HapticManager.shared.notification(.success)
                 }
             }

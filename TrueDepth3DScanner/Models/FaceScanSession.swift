@@ -2,10 +2,11 @@ import Foundation
 import ARKit
 import UIKit
 
-/// A single captured frame of face geometry and camera image from a specific scan direction.
+/// A single captured frame of face geometry with projective UV mapping and RGB camera photo.
 struct CapturedFrame {
     let vertices: [SIMD3<Float>]
-    let textureCoordinates: [SIMD2<Float>]
+    let textureCoordinates: [SIMD2<Float>] // Projective UVs matching the camera image
+    let canonicalUVs: [SIMD2<Float>]       // Standard ARKit canonical UVs
     let triangleIndices: [Int16]
     let direction: ScanDirection
     let timestamp: Date

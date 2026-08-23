@@ -258,9 +258,9 @@ struct SceneKitContainer: UIViewRepresentable {
         }
         let normalSource = SCNGeometrySource(normals: normalVectors)
 
-        // Texture Coordinates (UV mapping)
+        // Texture Coordinates (1:1 Projective UV mapping)
         let texCoordSource = SCNGeometrySource(
-            textureCoordinates: texCoords.map { CGPoint(x: CGFloat($0.x), y: CGFloat(1.0 - $0.y)) }
+            textureCoordinates: texCoords.map { CGPoint(x: CGFloat($0.x), y: CGFloat($0.y)) }
         )
 
         // Geometry Element (Triangles)
