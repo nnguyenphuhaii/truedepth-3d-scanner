@@ -271,7 +271,6 @@ struct SceneKitContainer: UIViewRepresentable {
             material.fillMode = .fill
         }
         material.isDoubleSided = true
-        material.cullMode = .none
         geometry.materials = [material]
 
         let meshNode = SCNNode(geometry: geometry)
