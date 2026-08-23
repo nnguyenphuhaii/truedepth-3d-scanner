@@ -1,6 +1,6 @@
 import Foundation
 
-/// Represents the five directions the user is guided to turn during scanning.
+/// Represents the five guided directions for face scanning.
 enum ScanDirection: Int, CaseIterable, Identifiable {
     case center = 0
     case left
@@ -12,48 +12,54 @@ enum ScanDirection: Int, CaseIterable, Identifiable {
 
     var instruction: String {
         switch self {
-        case .center: return "Nhìn Thẳng Vào Camera"
-        case .left:   return "Xoay Đầu Sang Trái"
-        case .right:  return "Xoay Đầu Sang Phải"
-        case .up:     return "Ngửa Đầu Lên Trên"
-        case .down:   return "Cúi Đầu Xuống Dưới"
+        case .center: return "Nhìn Thẳng"
+        case .left:   return "Xoay Sang Trái"
+        case .right:  return "Xoay Sang Phải"
+        case .up:     return "Ngước Lên Trên"
+        case .down:   return "Cúi Xuống Dưới"
         }
     }
 
     var hint: String {
         switch self {
-        case .center: return "Giữ thẳng khuôn mặt"
-        case .left:   return "Nghiêng nhẹ ~15° sang trái"
-        case .right:  return "Nghiêng nhẹ ~15° sang phải"
-        case .up:     return "Ngước nhẹ ~10° lên trên"
-        case .down:   return "Cúi nhẹ ~10° xuống dưới"
+        case .center: return "Giữ mặt ở giữa khung hình"
+        case .left:   return "Xoay nhẹ mặt sang trái"
+        case .right:  return "Xoay nhẹ mặt sang phải"
+        case .up:     return "Ngước nhẹ cằm lên trên"
+        case .down:   return "Cúi nhẹ cằm xuống dưới"
         }
     }
 
     var systemImage: String {
         switch self {
-        case .center: return "face.smiling"
-        case .left:   return "arrow.left"
-        case .right:  return "arrow.right"
-        case .up:     return "arrow.up"
-        case .down:   return "arrow.down"
+        case .center: return "face.smiling.fill"
+        case .left:   return "arrow.left.circle.fill"
+        case .right:  return "arrow.right.circle.fill"
+        case .up:     return "arrow.up.circle.fill"
+        case .down:   return "arrow.down.circle.fill"
         }
     }
 
-    /// Check if current head pose (relative to center baseline) matches this target direction.
-    /// Uses flexible thresholds in radians (~10-15 degrees) for effortless, natural scanning.
-    func isInPosition(relativeYaw: Float, relativePitch: Float) -> Bool {
+    /// Checks if current normal vector delta matches target direction.
+    /// deltaX: horizontal face orientation relative to center baseline.
+    /// deltaY: vertical face orientation relative to center baseline.
+    func isMatched(deltaX: Float, deltaY: Float) -> Bool {
+        let hThreshold: Float = 0.07 // ~4-5 degrees
+        let vThreshold: Float = 0.06 // ~3-4 degrees (extremely easy to reach)
+
         switch self {
         case .center:
-            return abs(relativeYaw) < 0.22 && abs(relativePitch) < 0.22
+            return abs(deltaX) < 0.12 && abs(deltaY) < 0.12
         case .left:
-            return relativeYaw > 0.18
+            return deltaX > hThreshold || deltaX < -hThreshold && abs(deltaX) > abs(deltaY) * 1.2
         case .right:
-            return relativeYaw < -0.18
+            return deltaX < -hThreshold || deltaX > hThreshold && abs(deltaX) > abs(deltaY) * 1.2
         case .up:
-            return relativePitch > 0.14
+            // When looking UP, deltaY > 0 or deltaY < 0 depending on matrix projection
+            // Checking both absolute dominant vertical movement and direct sign
+            return deltaY > vThreshold || (abs(deltaY) > vThreshold && abs(deltaY) > abs(deltaX))
         case .down:
-            return relativePitch < -0.14
+            return deltaY < -vThreshold || (abs(deltaY) > vThreshold && abs(deltaY) > abs(deltaX))
         }
     }
 }

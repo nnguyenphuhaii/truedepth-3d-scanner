@@ -4,33 +4,33 @@ import SceneKit
 import Combine
 import simd
 
-/// Manages the full face scanning lifecycle with high performance:
-/// - 60 FPS SIMD head pose extraction (0 memory allocation)
-/// - Throttled UI state updates (15 FPS) to eliminate lag
-/// - Baseline angle calibration for effortless relative motion tracking
-/// - Automatic & Manual capture modes
+/// Manages the face scanning lifecycle:
+/// - 60 FPS SIMD face orientation extraction
+/// - Automatic baseline calibration
+/// - Lenient angle detection with instant 3-frame auto-capture (~0.05s)
+/// - Tap-to-select direction & Manual shutter capture
 final class ScannerViewModel: NSObject, ObservableObject {
 
     @Published var scanSession = FaceScanSession()
     @Published var isFaceDetected: Bool = false
-    @Published var currentYaw: Float = 0.0
-    @Published var currentPitch: Float = 0.0
+    @Published var currentDeltaX: Float = 0.0
+    @Published var currentDeltaY: Float = 0.0
     @Published var directionProgress: Double = 0.0
 
     private let logger = LoggerService.shared
     private var framesForCurrentDirection: Int = 0
-    private let requiredFramesPerDirection: Int = 5  // ~0.08s hold time for instant, effortless capture
+    private let requiredFramesPerDirection: Int = 3  // Instant capture (~0.05s)
     private var isCapturingDirection: Bool = false
     private weak var arView: ARSCNView?
 
-    // Calibration baseline angles
-    private var baseYaw: Float = 0.0
-    private var basePitch: Float = 0.0
+    // Baseline face orientation (calibrated on center)
+    private var baselineX: Float = 0.0
+    private var baselineY: Float = 0.0
     private var isCalibrated: Bool = false
 
-    // Throttling UI updates to prevent main thread starvation
+    // UI Throttling
     private var lastUIUpdateTime: TimeInterval = 0
-    private let uiUpdateInterval: TimeInterval = 0.066 // ~15 FPS UI update rate
+    private let uiUpdateInterval: TimeInterval = 0.066 // ~15 FPS UI update
 
     /// Whether the device supports ARKit face tracking (TrueDepth camera required).
     var isARFaceTrackingSupported: Bool {
@@ -98,8 +98,15 @@ final class ScannerViewModel: NSObject, ObservableObject {
         logger.log("Scan reset", level: .info)
     }
 
+    /// Manually switch the active target direction when user taps a direction in the checklist.
+    func selectDirection(_ direction: ScanDirection) {
+        scanSession.currentDirection = direction
+        framesForCurrentDirection = 0
+        directionProgress = 0.0
+        HapticManager.shared.selection()
+    }
+
     /// Called directly on the AR rendering thread.
-    /// Uses SIMD math for 0-allocation angle extraction and throttles UI updates.
     func handleFaceAnchorUpdate(_ faceAnchor: ARFaceAnchor) {
         guard faceAnchor.isTracked else {
             let now = CACurrentMediaTime()
@@ -112,27 +119,29 @@ final class ScannerViewModel: NSObject, ObservableObject {
             return
         }
 
-        // Fast SIMD Euler angle extraction from 4x4 transform
+        // Extract face normal vector (columns.2)
         let transform = faceAnchor.transform
-        let pitch = asin(-transform.columns.2.y)
-        let yaw = atan2(transform.columns.2.x, transform.columns.2.z)
+        let currentX = transform.columns.2.x
+        let currentY = transform.columns.2.y
 
         guard scanSession.state == .scanning else { return }
 
         // Calibrate baseline when looking straight ahead
         if !isCalibrated {
-            baseYaw = yaw
-            basePitch = pitch
+            baselineX = currentX
+            baselineY = currentY
             isCalibrated = true
-            logger.log(String(format: "Calibrated baseline: yaw=%.2f, pitch=%.2f", baseYaw, basePitch), level: .debug)
+            logger.log(String(format: "Calibrated baseline: x=%.3f, y=%.3f", baselineX, baselineY), level: .debug)
         }
 
-        let relativeYaw = yaw - baseYaw
-        let relativePitch = pitch - basePitch
+        let deltaX = currentX - baselineX
+        let deltaY = currentY - baselineY
         let direction = scanSession.currentDirection
 
         // Check if head pose matches target direction
-        if direction.isInPosition(relativeYaw: relativeYaw, relativePitch: relativePitch) {
+        let matched = direction.isMatched(deltaX: deltaX, deltaY: deltaY)
+
+        if matched {
             framesForCurrentDirection += 1
 
             let progressFraction = min(1.0, Double(framesForCurrentDirection) / Double(requiredFramesPerDirection))
@@ -141,14 +150,13 @@ final class ScannerViewModel: NSObject, ObservableObject {
                 isCapturingDirection = true
                 captureGeometry(from: faceAnchor.geometry, direction: direction)
             } else {
-                // Throttled UI progress update
                 let now = CACurrentMediaTime()
                 if now - lastUIUpdateTime > uiUpdateInterval {
                     lastUIUpdateTime = now
                     DispatchQueue.main.async { [weak self] in
                         self?.isFaceDetected = true
-                        self?.currentYaw = relativeYaw
-                        self?.currentPitch = relativePitch
+                        self?.currentDeltaX = deltaX
+                        self?.currentDeltaY = deltaY
                         self?.directionProgress = progressFraction
                     }
                 }
@@ -164,20 +172,20 @@ final class ScannerViewModel: NSObject, ObservableObject {
                 let progressFraction = min(1.0, Double(framesForCurrentDirection) / Double(requiredFramesPerDirection))
                 DispatchQueue.main.async { [weak self] in
                     self?.isFaceDetected = true
-                    self?.currentYaw = relativeYaw
-                    self?.currentPitch = relativePitch
+                    self?.currentDeltaX = deltaX
+                    self?.currentDeltaY = deltaY
                     self?.directionProgress = progressFraction
                 }
             }
         }
     }
 
-    /// Manual capture button action: captures the current face geometry instantly.
+    /// Manual capture button: captures the current face geometry immediately.
     func manualCaptureCurrentFrame() {
         guard let arView = arView,
               let currentFrame = arView.session.currentFrame,
               let faceAnchor = currentFrame.anchors.compactMap({ $0 as? ARFaceAnchor }).first else {
-            logger.log("Không tìm thấy khuôn mặt để chụp thủ công", level: .warning)
+            logger.log("Không tìm thấy khuôn mặt để chụp", level: .warning)
             HapticManager.shared.notification(.error)
             return
         }
@@ -187,7 +195,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
         HapticManager.shared.impact(.heavy)
     }
 
-    /// Finish scanning early and start 3D processing with whatever frames were captured.
+    /// Finish scanning early and start 3D processing.
     func finishScanEarly() {
         guard !scanSession.capturedFrames.isEmpty else {
             logger.log("Chưa có frame nào được chụp", level: .warning)
@@ -220,15 +228,15 @@ final class ScannerViewModel: NSObject, ObservableObject {
             self.isCapturingDirection = false
 
             self.logger.log(
-                "Đã quét thành công: \(direction.instruction) (\(vertexCount) vertices)",
+                "Đã quét thành công góc: \(direction.instruction) (\(vertexCount) vertices)",
                 level: .info
             )
 
             HapticManager.shared.notification(.success)
 
-            // Check if all 5 directions have been completed
+            // Auto-advance or finish
             if self.scanSession.isAllDirectionsCaptured {
-                self.logger.log("Đã hoàn thành 5/5 góc quét. Bắt đầu xử lý 3D...", level: .info)
+                self.logger.log("Đã quét đủ 5/5 góc. Đang ghép Mesh 3D...", level: .info)
                 self.processScan()
             }
         }
@@ -238,7 +246,7 @@ final class ScannerViewModel: NSObject, ObservableObject {
     func processScan() {
         scanSession.state = .processing
         arView?.session.pause()
-        logger.log("Bắt đầu ghép Mesh 3D đa luồng...", level: .info)
+        logger.log("Bắt đầu xử lý dữ liệu 3D...", level: .info)
 
         Task {
             let result = await FaceMeshProcessor.processCapturedFrames(scanSession.capturedFrames)
@@ -250,12 +258,12 @@ final class ScannerViewModel: NSObject, ObservableObject {
                 scanSession.finalIndices = result.indices
 
                 if result.vertices.isEmpty {
-                    scanSession.state = .failed("Không có dữ liệu 3D sau khi xử lý.")
-                    logger.log("Ghép mesh thất bại: kết quả rỗng", level: .error)
+                    scanSession.state = .failed("Không tạo được mô hình 3D.")
+                    logger.log("Ghép mesh thất bại", level: .error)
                     HapticManager.shared.notification(.error)
                 } else {
                     scanSession.state = .completed
-                    logger.log("Ghép mesh 3D thành công: \(result.vertices.count) đỉnh", level: .info)
+                    logger.log("Mô hình 3D hoàn tất: \(result.vertices.count) đỉnh", level: .info)
                     HapticManager.shared.notification(.success)
                 }
             }
