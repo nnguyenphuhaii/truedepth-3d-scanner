@@ -64,7 +64,7 @@ struct Viewer3DView: View {
                             Button {
                                 exportAsOBJ()
                             } label: {
-                                Label("Xuất file Wavefront OBJ (.obj + .mtl + Texture)", systemImage: "doc.text")
+                                Label("Xuất OBJ dạng ZIP (.obj + .mtl + Texture)", systemImage: "doc.zipper")
                             }
 
                             Button {
